@@ -150,27 +150,23 @@ function differentiate(a::HomogeneousPolynomial, r::Int)
     @assert 1 ≤ r ≤ get_numvars()
     T = TS.numtype(a)
     get_order(a) == 0 && return HomogeneousPolynomial(zero(a[1]), 0)
+    order = get_order(a)
     @inbounds num_coeffs = size_table[get_order(a)]
     coeffs = zeros(T, num_coeffs)
-    @inbounds posTb = pos_table[get_order(a)]
-    @inbounds num_coeffs = size_table[get_order(a)+1]
-    ct = zeros(Int, get_numvars(), num_coeffs)
-    for i = 1:num_coeffs
-        ct[:, i] .= coeff_table[get_order(a)+1][i][:]
-    end
+    @inbounds posTb = pos_table[order]
+    @inbounds num_coeffs = size_table[order+1]
+    @inbounds ct = coeff_table[order+1]
+    @inbounds indT = index_table[order+1]
+    @inbounds shift = base_powers[r]
     @inbounds for i = 1:num_coeffs
-        # iind = @isonethread coeff_table[get_order(a)+1][i]
-        iind = view(ct, :, i)
-        n = iind[r]
+        n = ct[i][r]
         n == 0 && continue
-        iind[r] -= 1
-        kdic = in_base(get_order(), iind)
+        kdic = indT[i] - shift
         pos = posTb[kdic]
         coeffs[pos] = n * a[i]
-        iind[r] += 1
     end
 
-    return HomogeneousPolynomial{T}(coeffs, get_order(a)-1)
+    return HomogeneousPolynomial{T}(coeffs, order-1)
 end
 differentiate(a::HomogeneousPolynomial, s::Symbol) = differentiate(a, lookupvar(s))
 
@@ -382,20 +378,15 @@ function integrate(a::HomogeneousPolynomial, r::Int)
     @inbounds num_coeffs = size_table[get_order(a)+1]
     T = promote_type(TS.numtype(a), TS.numtype(a[1]/1))
     coeffs = zeros(T, size_table[get_order(a)+2])
-    ct = zeros(Int, get_numvars(), num_coeffs)
-    for i = 1:num_coeffs
-        ct[:, i] .= coeff_table[get_order(a)+1][i][:]
-    end
+    @inbounds ct = coeff_table[get_order(a)+1]
+    @inbounds indT = index_table[get_order(a)+1]
+    @inbounds shift = base_powers[r]
     @inbounds for i = 1:num_coeffs
-        # iind = @isonethread coeff_table[get_order(a)+1][i]
-        iind = view(ct, :, i)
-        n = iind[r]
+        n = ct[i][r]
         n == order_max && continue
-        iind[r] += 1
-        kdic = in_base(get_order(), iind)
+        kdic = indT[i] + shift
         pos = posTb[kdic]
         coeffs[pos] = a[i] / (n+1)
-        iind[r] -= 1
     end
     return HomogeneousPolynomial(coeffs, get_order(a)+1)
 end

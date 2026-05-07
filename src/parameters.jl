@@ -164,9 +164,11 @@ function set_variables(::Type{R}, names::Vector{T}; order=get_order()) where
         resize!(index_table,order+1)
         resize!(size_table,order+1)
         resize!(pos_table,order+1)
+        resize!(base_powers,num_vars)
 
-        coeff_table[:], index_table[:], size_table[:], pos_table[:] =
+        coeff_table[:], index_table[:], size_table[:], pos_table[:], base_powers[:] =
             generate_tables(num_vars, order)
+        empty!(_mul_position_cache)
         GC.gc();
     end
 

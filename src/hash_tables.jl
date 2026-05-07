@@ -45,7 +45,9 @@ function generate_tables(num_vars, order)
     # but it's commented because it may not pass due to the `binomial`
     # @assert sum(size_table) == binomial(num_vars+order, min(num_vars,order))
 
-    return (coeff_table, index_table, size_table, pos_table)
+    base_powers = generate_base_powers(num_vars, order)
+
+    return (coeff_table, index_table, size_table, pos_table, base_powers)
 end
 
 """
@@ -86,6 +88,19 @@ It is used to construct `pos_table` from `index_table`.
 """
 make_inverse_dict(v::Vector) = Dict(Dict(x=>i for (i,x) in enumerate(v)))
 
+@inline hash_base(order::Int) = iseven(order) ? order + 1 : order + 2
+
+function generate_base_powers(num_vars::Int, order::Int)
+    base = hash_base(order)
+    powers = Vector{Int}(undef, num_vars)
+    value = 1
+    @inbounds for ind in num_vars:-1:1
+        powers[ind] = value
+        value *= base
+    end
+    return powers
+end
+
 """
     in_base(order, v)
 
@@ -93,22 +108,51 @@ Convert vector `v` of non-negative integers to base `oorder`, where
 `oorder` is the next odd integer of `order`.
 """
 function in_base(order, v)
-    oorder = iseven(order) ? order+1 : order+2 # `oorder` is the next odd integer to `order`
-
+    oorder = hash_base(order) # `oorder` is the next odd integer to `order`
     result = 0
-
-    all(iszero.(v)) && return result
-
-    for i in v
+    @inbounds for i in v
         result = result*oorder + i
     end
-
     return result
 end
 
 
-const coeff_table, index_table, size_table, pos_table =
+const coeff_table, index_table, size_table, pos_table, base_powers =
     generate_tables(get_numvars(), get_order())
+
+const _mul_position_cache = Dict{Tuple{Int,Int}, Vector{Int}}()
+const _mul_position_cache_lock = ReentrantLock()
+
+function _build_mul_position_table(order_a::Int, order_b::Int)
+    num_coeffs_a = size_table[order_a+1]
+    num_coeffs_b = size_table[order_b+1]
+    order_c = order_a + order_b
+    positions = Vector{Int}(undef, num_coeffs_a * num_coeffs_b)
+    posTb = pos_table[order_c+1]
+    indTa = index_table[order_a+1]
+    indTb = index_table[order_b+1]
+    ind = 0
+    @inbounds for na in 1:num_coeffs_a
+        inda = indTa[na]
+        for nb in 1:num_coeffs_b
+            ind += 1
+            positions[ind] = posTb[inda + indTb[nb]]
+        end
+    end
+    return positions
+end
+
+function mul_position_table(order_a::Int, order_b::Int)
+    key = (order_a, order_b)
+    lock(_mul_position_cache_lock)
+    try
+        return get!(_mul_position_cache, key) do
+            _build_mul_position_table(order_a, order_b)
+        end
+    finally
+        unlock(_mul_position_cache_lock)
+    end
+end
 
 # Garbage-collect here to free memory
 GC.gc();

@@ -21,6 +21,7 @@ using Reexport
 
 using SparseArrays: SparseMatrixCSC
 using Markdown
+using PrecompileTools
 
 using LinearAlgebra: norm, mul!,
     lu, lu!, LinearAlgebra.lutype, LinearAlgebra.copy_oftype,
@@ -77,5 +78,6 @@ include("calculus.jl")
 include("dictmutfunct.jl")
 include("broadcasting.jl")
 include("printing.jl")
+include("precompile.jl")
 
 end # module

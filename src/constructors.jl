@@ -118,6 +118,8 @@ struct HomogeneousPolynomial{T<:Number} <: AbstractSeries{T}
         coeffs  :: FixedSizeVectorDefault{T}
         order   :: Int
     ## Inner constructors ##
+    HomogeneousPolynomial{T}(coeffs::FixedSizeVectorDefault{T}, order::Int) where {T<:Number} =
+        new{T}(coeffs, order)
     HomogeneousPolynomial{T}(x::T, order::Int) where {T<:Number} =
         new{T}(_coeffsHP(x, order), order)
     HomogeneousPolynomial{T}(coeffs::AbstractArray{T,1}, order::Int) where {T<:Number} =
@@ -181,6 +183,9 @@ Note that `TaylorN` variables are callable. For more information, see
 struct TaylorN{T<:Number} <: AbstractSeries{T}
         coeffs  :: FixedSizeVectorDefault{HomogeneousPolynomial{T}}
     ## Inner constructor ##
+    function TaylorN{T}(coeffs::FixedSizeVectorDefault{HomogeneousPolynomial{T}}) where {T<:Number}
+        return new{T}(coeffs)
+    end
     function TaylorN{T}(v::AbstractArray{HomogeneousPolynomial{T},1},
             order::Int) where {T<:Number}
         isempty(v) &&

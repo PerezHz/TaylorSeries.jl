@@ -178,8 +178,30 @@ function evaluate(a::HomogeneousPolynomial{T}) where {T}
 end
 
 # Internal method that avoids checking that the length of `vals` is the appropriate
-function _evaluate(a::HomogeneousPolynomial{T}, vals::NTuple) where {T}
-    # @assert length(vals) == get_numvars()
+@inline _value_powers(vals::NTuple{N,<:Number}, order::Int) where {N} =
+    ntuple(i -> _value_powers(vals[i], order), Val(N))
+
+function _value_powers(val::T, order::Int) where {T<:Number}
+    powers = Vector{typeof(one(val)*val)}(undef, order+1)
+    @inbounds powers[1] = one(val)
+    @inbounds for ord in 1:order
+        powers[ord+1] = powers[ord] * val
+    end
+    return powers
+end
+
+_eval_cache_enabled(::Type) = true
+_eval_cache_enabled_values(::Tuple{}) = true
+_eval_cache_enabled_values(vals::Tuple) =
+    _eval_cache_enabled(typeof(vals[1])) && _eval_cache_enabled_values(Base.tail(vals))
+
+function _evaluate(a::HomogeneousPolynomial{T}, vals::NTuple{N,<:Number}) where {N,T}
+    (_eval_cache_enabled(T) && _eval_cache_enabled_values(vals)) ||
+        return _evaluate_uncached(a, vals)
+    return _evaluate_with_powers(a, _value_powers(vals, get_order(a)))
+end
+
+function _evaluate_uncached(a::HomogeneousPolynomial{T}, vals::NTuple) where {T}
     get_order(a) == 0 && return a[1]*one(vals[1])
     ct = coeff_table[get_order(a)+1]
     suma = zero(a[1])*vals[1]
@@ -187,7 +209,22 @@ function _evaluate(a::HomogeneousPolynomial{T}, vals::NTuple) where {T}
     for (i, a_coeff) in enumerate(a.coeffs)
         TS._isthinzero(a_coeff) && continue
         @inbounds vv .= vals .^ ct[i]
-        tmp = prod( vv )
+        tmp = prod(vv)
+        suma += a_coeff * tmp
+    end
+    return suma
+end
+
+function _evaluate_with_powers(a::HomogeneousPolynomial{T}, valspowers::NTuple{N,<:AbstractVector}) where {N,T}
+    get_order(a) == 0 && return a[1]*valspowers[1][1]
+    ct = coeff_table[get_order(a)+1]
+    suma = zero(a[1])*valspowers[1][1]
+    for (i, a_coeff) in enumerate(a.coeffs)
+        TS._isthinzero(a_coeff) && continue
+        @inbounds tmp = valspowers[1][ct[i][1]+1]
+        @inbounds for ind in 2:N
+            tmp *= valspowers[ind][ct[i][ind]+1]
+        end
         suma += a_coeff * tmp
     end
     return suma
@@ -317,11 +354,31 @@ evaluate(a::TaylorN{T}) where {T<:Number} = constant_term(a)
 
 
 # _evaluate
-_evaluate(a::TaylorN{T}, vals::NTuple, ::Val{true}) where
-    {T<:NumberNotSeries} = sum( sort!(_evaluate(a, vals), by=abs2) )
+function _evaluate(a::TaylorN{T}, vals::NTuple{N,<:Number}, ::Val{true}) where
+        {N,T<:NumberNotSeries}
+    (_eval_cache_enabled(T) && _eval_cache_enabled_values(vals)) ||
+        return sum(sort!(_evaluate_uncached_terms(a, vals), by=abs2))
+    valspowers = _value_powers(vals, get_order(a))
+    first_term = _evaluate_with_powers(a[0], valspowers)
+    terms = Vector{typeof(first_term)}(undef, length(a))
+    @inbounds terms[1] = first_term
+    @inbounds for homPol in 1:get_order(a)
+        terms[homPol+1] = _evaluate_with_powers(a[homPol], valspowers)
+    end
+    return sum(sort!(terms, by=abs2))
+end
 
-_evaluate(a::TaylorN{T}, vals::NTuple, ::Val{false}) where {T<:Number} =
-    sum( _evaluate(a, vals) )
+function _evaluate(a::TaylorN{T}, vals::NTuple{N,<:Number}, ::Val{false}) where
+        {N,T<:Number}
+    (_eval_cache_enabled(T) && _eval_cache_enabled_values(vals)) ||
+        return sum(_evaluate_uncached_terms(a, vals))
+    valspowers = _value_powers(vals, get_order(a))
+    suma = _evaluate_with_powers(a[0], valspowers)
+    @inbounds for homPol in 1:get_order(a)
+        suma += _evaluate_with_powers(a[homPol], valspowers)
+    end
+    return suma
+end
 
 function _evaluate(a::TaylorN{T}, vals::NTuple{N,<:TaylorN}, ::Val{false}) where
         {N,T<:Number}
@@ -337,10 +394,24 @@ function _evaluate(a::TaylorN{T}, vals::NTuple{N,<:TaylorN}, ::Val{false}) where
 end
 
 function _evaluate(a::TaylorN{T}, vals::NTuple{N,<:Number}) where {N,T<:Number}
+    (_eval_cache_enabled(T) && _eval_cache_enabled_values(vals)) ||
+        return _evaluate_uncached_terms(a, vals)
+    valspowers = _value_powers(vals, get_order(a))
+    first_term = _evaluate_with_powers(a[0], valspowers)
+    suma = Vector{typeof(first_term)}(undef, length(a))
+    @inbounds suma[1] = first_term
+    @inbounds for homPol in eachindex(a)
+        iszero(homPol) && continue
+        suma[homPol+1] = _evaluate_with_powers(a[homPol], valspowers)
+    end
+    return suma
+end
+
+function _evaluate_uncached_terms(a::TaylorN{T}, vals::NTuple{N,<:Number}) where {N,T<:Number}
     R = promote_type(T, typeof(vals[1]))
     suma = zeros(R, length(a))
     @inbounds for homPol in eachindex(a)
-        suma[homPol+1] = _evaluate(a[homPol], vals)
+        suma[homPol+1] = _evaluate_uncached(a[homPol], vals)
     end
     return suma
 end
@@ -505,14 +576,33 @@ end
 
 ## In place evaluation of multivariable arrays
 function evaluate!(x::AbstractArray{TaylorN{T}}, δx::Array{T,1},
-        dest::AbstractArray{T}) where {T<:Number}
-    dest .= evaluate.( x, Ref(δx) )
+        dest::AbstractArray{T}; sorting::Bool=true) where {T<:Number}
+    vals = (δx...,)
+    @inbounds for i in eachindex(x, dest)
+        dest[i] = evaluate(x[i], vals; sorting=sorting)
+    end
+    return nothing
+end
+
+function evaluate!(x::AbstractArray{TaylorN{T}}, δx::Array{T,1},
+        dest::AbstractArray{T}; sorting::Bool=false) where {T<:AbstractSeries}
+    vals = (δx...,)
+    @inbounds for i in eachindex(x, dest)
+        dest[i] = evaluate(x[i], vals; sorting=sorting)
+    end
     return nothing
 end
 
 function evaluate!(x::AbstractArray{TaylorN{T}}, δx::Array{TaylorN{T},1},
-        dest::AbstractArray{TaylorN{T}}; sorting::Bool=true) where {T<:NumberNotSeriesN}
-    dest .= evaluate.( x, Ref(δx), sorting = sorting)
+        dest::AbstractArray{TaylorN{T}}; sorting::Bool=false) where {T<:NumberNotSeriesN}
+    vals = (δx...,)
+    if sorting
+        @inbounds for i in eachindex(x, dest)
+            dest[i] = evaluate(x[i], vals; sorting=true)
+        end
+    else
+        evaluate!(x, vals, dest)
+    end
     return nothing
 end
 

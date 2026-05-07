@@ -306,6 +306,35 @@ Returns the type of the elements of the coefficients of `a`.
 @inline aff_normalize(a::AbstractSeries) = a
 
 
+## copy ##
+_copy_coeff(x::NumberNotSeries) = copy(x)
+_copy_coeff(x::AbstractSeries) = copy(x)
+
+function Base.copy(a::Taylor1{T}) where {T<:Number}
+    coeffs = FixedSizeVectorDefault{T}(undef, length(a.coeffs))
+    @inbounds for i in eachindex(a.coeffs)
+        coeffs[i] = _copy_coeff(a.coeffs[i])
+    end
+    return Taylor1{T}(coeffs)
+end
+
+function Base.copy(a::HomogeneousPolynomial{T}) where {T<:Number}
+    coeffs = FixedSizeVectorDefault{T}(undef, length(a.coeffs))
+    @inbounds for i in eachindex(a.coeffs)
+        coeffs[i] = _copy_coeff(a.coeffs[i])
+    end
+    return HomogeneousPolynomial{T}(coeffs, get_order(a))
+end
+
+function Base.copy(a::TaylorN{T}) where {T<:Number}
+    coeffs = FixedSizeVectorDefault{HomogeneousPolynomial{T}}(undef, length(a.coeffs))
+    @inbounds for i in eachindex(a.coeffs)
+        coeffs[i] = copy(a.coeffs[i])
+    end
+    return TaylorN{T}(coeffs)
+end
+
+
 ## _minorder
 function _minorder(a, b)
     minorder, maxorder = minmax(get_order(a), get_order(b))

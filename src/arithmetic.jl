@@ -34,19 +34,41 @@ for (f, fc) in ((:+, :(add!)), (:-, :(subst!)))
                 return c
             end
 
-            ($f)(a::$T{T}, b::S) where {T<:Number, S<:NumberNotSeries} = ($f)(promote(a, b)...)
+            function ($f)(a::$T{T}, b::S) where {T<:Number, S<:NumberNotSeries}
+                R = promote_type(T, S)
+                aa = R == T ? a : convert($T{R}, a)
+                c = copy(aa)
+                c[0] = ($f)(aa[0], b)
+                return c
+            end
 
             function ($f)(a::$T{T}, b::T) where {T<:Number}
-                c = $T(a.coeffs[:])
+                c = copy(a)
                 c[0] = $f(a[0], b)
                 return c
             end
 
-            ($f)(b::S, a::$T{T}) where {T<:Number, S<:NumberNotSeries} = ($f)(promote(b, a)...)
+            function ($f)(b::S, a::$T{T}) where {T<:Number, S<:NumberNotSeries}
+                R = promote_type(T, S)
+                aa = R == T ? a : convert($T{R}, a)
+                if $(QuoteNode(f)) === :+
+                    c = copy(aa)
+                    c[0] = ($f)(b, aa[0])
+                else
+                    c = -aa
+                    c[0] = ($f)(b, aa[0])
+                end
+                return c
+            end
 
             function ($f)(b::T, a::$T{T}) where {T<:Number}
-                c = $T($f(a.coeffs[:]))
-                c[0] = b + a[0]
+                if $(QuoteNode(f)) === :+
+                    c = copy(a)
+                    c[0] = $f(b, a[0])
+                else
+                    c = -a
+                    c[0] = $f(b, a[0])
+                end
                 return c
             end
 
@@ -778,21 +800,17 @@ c, a and b are `HomogeneousPolynomial`.
     (_isthinzero(b) || _isthinzero(a)) && return nothing
     order_a = get_order(a)+1
     order_b = get_order(b)+1
-    order_c = get_order(c)+1
     @inbounds num_coeffs_a = size_table[order_a]
     @inbounds num_coeffs_b = size_table[order_b]
-    @inbounds posTb = pos_table[order_c]
-    @inbounds indTa = index_table[order_a]
-    @inbounds indTb = index_table[order_b]
+    positions = mul_position_table(get_order(a), get_order(b))
     @inbounds for na in 1:num_coeffs_a
         ca = a[na]
         _isthinzero(ca) && continue
-        inda = indTa[na]
+        pos_offset = (na - 1) * num_coeffs_b
         @inbounds for nb in 1:num_coeffs_b
             cb = b[nb]
             _isthinzero(cb) && continue
-            indb = indTb[nb]
-            pos = posTb[inda + indb]
+            pos = positions[pos_offset + nb]
             c[pos] += ca * cb
         end
     end
@@ -812,21 +830,17 @@ c, a and b are `HomogeneousPolynomial`; `scalar` is a NumberNotSeries.
     (_isthinzero(b) || _isthinzero(a)) && return nothing
     order_a = get_order(a)+1
     order_b = get_order(b)+1
-    order_c = get_order(c)+1
     @inbounds num_coeffs_a = size_table[order_a]
     @inbounds num_coeffs_b = size_table[order_b]
-    @inbounds posTb = pos_table[order_c]
-    @inbounds indTa = index_table[order_a]
-    @inbounds indTb = index_table[order_b]
+    positions = mul_position_table(get_order(a), get_order(b))
     @inbounds for na in 1:num_coeffs_a
         ca = a[na]
         _isthinzero(ca) && continue
-        inda = indTa[na]
+        pos_offset = (na - 1) * num_coeffs_b
         @inbounds for nb in 1:num_coeffs_b
             cb = b[nb]
             _isthinzero(cb) && continue
-            indb = indTb[nb]
-            pos = posTb[inda + indb]
+            pos = positions[pos_offset + nb]
             c[pos] += scalar * ca * cb
         end
     end

@@ -38,6 +38,8 @@ _intersect_domain_nonstd(x::Interval, y::Interval) =
 # Some functions require special interval functions (isequal_interval, isthinzero)
 for I in (:Interval, :ComplexI)
     @eval begin
+        TS._eval_cache_enabled(::Type{<:$I}) = false
+
         TS._isthinzero(x::$I{T}) where {T<:Real} = isthinzero(x)
 
         function ==(a::Taylor1{$I{T}}, b::Taylor1{$I{S}}) where {T<:NumTypes, S<:NumTypes}
