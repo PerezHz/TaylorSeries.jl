@@ -593,9 +593,12 @@ end
     @test evaluate(ptxy, :x₁, xT) == ptxy
     @test evaluate(ptxy, 1, 1-yT) ≈ 4/3 + zero(yT)
     v = zeros(Int, 2)
-    @test isnothing(evaluate!([xT, yT], ones(Int, 2), v))
+    xyT = [xT, yT]
+    ones_int = ones(Int, 2)
+    @test isnothing(evaluate!(xyT, ones_int, v))
     @test v == ones(2)
-    @test isnothing(evaluate!([xT, yT][1:2], ones(Int, 2), v))
+    @test (@allocated evaluate!(xyT, ones_int, v)) == 0
+    @test isnothing(evaluate!(xyT[1:2], ones_int, v))
     @test v == ones(2)
     A_TN = [xT 2xT 3xT; yT 2yT 3yT]
     @test evaluate(A_TN, ones(2)) == [1.0 2.0 3.0; 1.0 2.0 3.0]
@@ -958,10 +961,15 @@ end
         r = [zero(x[1]) for _ in 1:n] # output vector
         radntn!.(v)
         x1 = randn(4) .+ x
+        x1_tuple = (x1...,)
+        valscache = [zero(val) for val in x1_tuple]
+        aux = zero(r[1])
         # warmup
-        evaluate!(v, (x1...,), r)
+        evaluate!(v, x1_tuple, r)
+        evaluate!(v, x1_tuple, r, valscache, aux)
         # call twice to make sure `r` is reset on second call
-        evaluate!(v, (x1...,), r)
+        evaluate!(v, x1_tuple, r)
+        @test (@allocated evaluate!(v, x1_tuple, r, valscache, aux)) == 0
         r2 = evaluate.(v, Ref(x1))
         @test r == r2
         @test iszero(norm(r-r2, Inf))

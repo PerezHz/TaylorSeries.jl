@@ -14,7 +14,8 @@ Evaluate a `Taylor1` polynomial using Horner's rule (hand coded). If `dx` is
 omitted, its value is considered as zero. Note that the syntax `a(dx)` is
 equivalent to `evaluate(a,dx)`, and `a()` is equivalent to `evaluate(a)`.
 """
-function evaluate(a::Taylor1{T}, dx::S) where {T<:NumberNotSeries, S<:NumberNotSeries}
+@inline function _evaluate_taylor1_scalar(a::Taylor1{T}, dx::S) where
+        {T<:NumberNotSeries, S<:NumberNotSeries}
     a_coeffs = a.coeffs
     @inbounds suma = zero(a_coeffs[end])
     # suma = evalpoly(dx, view(a.coeffs,:) )
@@ -23,6 +24,9 @@ function evaluate(a::Taylor1{T}, dx::S) where {T<:NumberNotSeries, S<:NumberNotS
     end
     return suma
 end
+
+evaluate(a::Taylor1{T}, dx::S) where
+    {T<:NumberNotSeries, S<:NumberNotSeries} = _evaluate_taylor1_scalar(a, dx)
 
 function evaluate(a::Taylor1{T}, dx::S) where {T<:Number, S<:Number}
     a_coeffs = a.coeffs
@@ -61,11 +65,24 @@ function evaluate(x::AbstractArray{Taylor1{Taylor1{T}}}, δt::S) where
     return dest
 end
 
+function _zero_taylorN_evaluation_result(a::Taylor1{TaylorN{T}}) where {T<:Number}
+    imax = firstindex(a.coeffs)
+    maxord = order(a.coeffs[imax])
+    @inbounds for i in (firstindex(a.coeffs)+1):lastindex(a.coeffs)
+        ord = order(a.coeffs[i])
+        if ord > maxord
+            imax = i
+            maxord = ord
+        end
+    end
+    return zero(a.coeffs[imax])
+end
+
 function evaluate(x::AbstractArray{Taylor1{TaylorN{T}}}, δt::S) where
         {T<:Number, S<:NumberNotSeries}
     dest = similar(x, TaylorN{T})
     @inbounds for i in eachindex(x, dest)
-        dest[i] = zero(x[i][0])
+        dest[i] = _zero_taylorN_evaluation_result(x[i])
     end
     evaluate!(x, δt, dest)
     return dest
@@ -219,20 +236,27 @@ function evaluate(a::HomogeneousPolynomial{T}) where {T}
 end
 
 # Internal method that avoids checking that the length of `vals` is the appropriate
-function _evaluate(a::HomogeneousPolynomial{T}, vals::NTuple) where {T}
+function _evaluate_homogeneous_scalar(a::HomogeneousPolynomial{T},
+        vals) where {T}
     # @assert length(vals) == get_numvars()
     order(a) == 0 && return a[1]*one(vals[1])
     ct = a.space.coeff_table[order(a)+1]
-    suma = zero(a[1])*vals[1]
-    vv = Base.literal_pow.(^, vals, Val.(ct[1]))
+    suma = zero(a[1]*one(vals[1]))
     for (i, a_coeff) in enumerate(a.coeffs)
         TS._isthinzero(a_coeff) && continue
-        @inbounds vv .= Base.literal_pow.(^, vals, Val.(ct[i]))
-        tmp = prod( vv )
-        suma += a_coeff * tmp
+        term = a_coeff * one(vals[1])
+        @inbounds for j in eachindex(vals)
+            exponent = ct[i][j]
+            exponent == 0 && continue
+            term *= Base.literal_pow(^, vals[j], Val(exponent))
+        end
+        suma += term
     end
     return suma
 end
+
+_evaluate(a::HomogeneousPolynomial{T}, vals::NTuple) where {T} =
+    _evaluate_homogeneous_scalar(a, vals)
 
 function _evaluate!(res::TaylorN{T}, a::HomogeneousPolynomial{T},
         vals::NTuple{N,<:TaylorN{T}}, valscache::Vector{TaylorN{T}},
@@ -318,6 +342,14 @@ function evaluate(a::TaylorN, vals::NTuple{N,<:AbstractSeries};
     return _evaluate(a, vals, Val(sorting))
 end
 
+function evaluate(a::TaylorN{T}, vals::NTuple{N,TaylorN{T}};
+        sorting::Bool=false) where {N,T<:Number}
+    @assert get_numvars(a) == N
+    dest = zero(vals[1])
+    evaluate!(a, vals, dest; sorting)
+    return dest
+end
+
 evaluate(a::TaylorN{T}, vals::AbstractVector{<:Number}; sorting::Bool=true) where
     {T<:NumberNotSeries} = evaluate(a, (vals...,); sorting)
 
@@ -386,7 +418,17 @@ function _evaluate(a::TaylorN{T}, vals::NTuple{N,<:Number}) where {N,T<:Number}
     R = promote_type(T, typeof(vals[1]))
     suma = zeros(R, length(a))
     @inbounds for homPol in eachindex(a)
-        suma[homPol+1] = _evaluate(a[homPol], vals)
+        suma[homPol+1] = _evaluate_homogeneous_scalar(a[homPol], vals)
+    end
+    return suma
+end
+
+function _evaluate_taylorN_scalar(a::TaylorN{T},
+        vals::AbstractVector{S}) where {T<:Number, S<:Number}
+    @assert length(vals) == get_numvars(a)
+    suma = zero(a[0][1] * one(vals[1]))
+    @inbounds for homPol in eachindex(a)
+        suma += _evaluate_homogeneous_scalar(a[homPol], vals)
     end
     return suma
 end
@@ -503,14 +545,28 @@ end
 
 
 #High-dim array evaluation
-function evaluate(A::AbstractArray{TaylorN{T},N}, δx::Vector{S}) where
-        {T<:Number, S<:Number, N}
-    R = promote_type(T,S)
-    return evaluate(convert(Array{TaylorN{R},N},A), convert(Vector{R},δx))
-end
-function evaluate(A::Array{TaylorN{T}}, δx::Vector{T}) where {T<:Number}
-    Anew = Array{T}(undef, size(A)...)
+function evaluate(A::AbstractArray{TaylorN{T}}, δx::AbstractVector{S}) where
+        {T<:Number, S<:Number}
+    Anew = similar(A, promote_type(T, S))
     evaluate!(A, δx, Anew)
+    return Anew
+end
+function evaluate(A::AbstractArray{TaylorN{T}}, δx::AbstractVector{TaylorN{T}};
+        sorting::Bool=false) where {T<:Number}
+    Anew = similar(A, TaylorN{T})
+    @inbounds for i in eachindex(Anew)
+        Anew[i] = zero(δx[1])
+    end
+    evaluate!(A, δx, Anew; sorting)
+    return Anew
+end
+function evaluate(A::AbstractArray{TaylorN{T}}, vals::NTuple{N,TaylorN{T}};
+        sorting::Bool=false) where {N,T<:Number}
+    Anew = similar(A, TaylorN{T})
+    @inbounds for i in eachindex(Anew)
+        Anew[i] = zero(vals[1])
+    end
+    evaluate!(A, vals, Anew; sorting)
     return Anew
 end
 evaluate(A::AbstractArray{TaylorN{T}}) where {T<:Number} = evaluate.(A)
@@ -541,7 +597,7 @@ function evaluate!(x::AbstractArray{Taylor1{T}}, δt::S,
         dest::AbstractArray{R}) where
         {T<:NumberNotSeries, S<:NumberNotSeries, R<:NumberNotSeries}
     @inbounds for i in eachindex(x, dest)
-        dest[i] = evaluate(x[i], δt)
+        dest[i] = _evaluate_taylor1_scalar(x[i], δt)
     end
     return nothing
 end
@@ -598,11 +654,18 @@ function evaluate!(a::Taylor1{TaylorN{T}}, δt::S,
     _check_same_space(dest, a[0])
     zero!(dest)
     @inbounds for k in reverse(eachindex(a))
+        a_coeff = a[k]
         for ordQ in eachindex(dest)
             dest_hp = dest[ordQ].coeffs
-            a_hp = a[k][ordQ].coeffs
-            for j in eachindex(dest_hp)
-                dest_hp[j] = dest_hp[j] * δt + a_hp[j]
+            if ordQ <= order(a_coeff)
+                a_hp = a_coeff[ordQ].coeffs
+                for j in eachindex(dest_hp)
+                    dest_hp[j] = dest_hp[j] * δt + a_hp[j]
+                end
+            else
+                for j in eachindex(dest_hp)
+                    dest_hp[j] *= δt
+                end
             end
         end
     end
@@ -677,15 +740,17 @@ function evaluate!(x::AbstractArray{Taylor1{TaylorN{T}}}, δt::TaylorN{T},
 end
 
 ## In place evaluation of multivariable arrays
-function evaluate!(x::AbstractArray{TaylorN{T}}, δx::Array{T,1},
-        dest::AbstractArray{T}) where {T<:Number}
-    dest .= evaluate.( x, Ref(δx) )
+function evaluate!(x::AbstractArray{TaylorN{T}}, δx::AbstractVector{S},
+        dest::AbstractArray{R}) where {T<:Number, S<:Number, R<:Number}
+    @inbounds for i in eachindex(x, dest)
+        dest[i] = _evaluate_taylorN_scalar(x[i], δx)
+    end
     return nothing
 end
 
-function evaluate!(x::AbstractArray{TaylorN{T}}, δx::Array{TaylorN{T},1},
-        dest::AbstractArray{TaylorN{T}}; sorting::Bool=true) where {T<:NumberNotSeriesN}
-    dest .= evaluate.( x, Ref(δx), sorting = sorting)
+function evaluate!(x::AbstractArray{TaylorN{T}}, δx::AbstractVector{TaylorN{T}},
+        dest::AbstractArray{TaylorN{T}}; sorting::Bool=false) where {T<:NumberNotSeriesN}
+    evaluate!(x, (δx...,), dest; sorting)
     return nothing
 end
 
@@ -697,16 +762,42 @@ function _evaluate!(a::TaylorN{T}, vals::NTuple{N,TaylorN{T}}, dest::TaylorN{T},
     return nothing
 end
 
+function evaluate!(a::TaylorN{T}, vals::NTuple{N,TaylorN{T}},
+        dest::TaylorN{T}, valscache::Vector{TaylorN{T}},
+        aux::TaylorN{T}; sorting::Bool=false) where {N,T<:Number}
+    length(valscache) == N || throw(DimensionMismatch(
+        "evaluation cache length must match the number of evaluation values"))
+    sorting && throw(ArgumentError("sorting=true is not supported by the allocation-free evaluate! kernel"))
+    (!iszero(dest)) && zero!(dest)
+    _evaluate!(a, vals, dest, valscache, aux)
+    return nothing
+end
+
+function evaluate!(a::TaylorN{T}, vals::NTuple{N,TaylorN{T}},
+        dest::TaylorN{T}; sorting::Bool=false) where {N,T<:Number}
+    valscache = [zero(val) for val in vals]
+    aux = zero(dest)
+    evaluate!(a, vals, dest, valscache, aux; sorting)
+    return nothing
+end
+
 function evaluate!(a::AbstractArray{TaylorN{T}}, vals::NTuple{N,TaylorN{T}},
-        dest::AbstractArray{TaylorN{T}}) where {N,T<:Number}
-    # initialize evaluation cache
+        dest::AbstractArray{TaylorN{T}}, valscache::Vector{TaylorN{T}},
+        aux::TaylorN{T}; sorting::Bool=false) where {N,T<:Number}
+    length(valscache) == N || throw(DimensionMismatch(
+        "evaluation cache length must match the number of evaluation values"))
+    sorting && throw(ArgumentError("sorting=true is not supported by the allocation-free evaluate! kernel"))
+    for i in eachindex(a)
+        evaluate!(a[i], vals, dest[i], valscache, aux; sorting)
+    end
+    return nothing
+end
+
+function evaluate!(a::AbstractArray{TaylorN{T}}, vals::NTuple{N,TaylorN{T}},
+        dest::AbstractArray{TaylorN{T}}; sorting::Bool=false) where {N,T<:Number}
     valscache = [zero(val) for val in vals]
     aux = zero(dest[1])
-    # loop over elements of `a`
-    for i in eachindex(a)
-        (!iszero(dest[i])) && zero!(dest[i])
-        _evaluate!(a[i], vals, dest[i], valscache, aux)
-    end
+    evaluate!(a, vals, dest, valscache, aux; sorting)
     return nothing
 end
 
