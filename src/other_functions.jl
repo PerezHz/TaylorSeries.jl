@@ -23,6 +23,11 @@ for T in (:Taylor1, :HomogeneousPolynomial, :TaylorN)
     @eval isnan(a::$T) = any(isnan, a.coeffs)
 end
 
+# Rounding
+round(::Type{T}, x::AbstractSeries; kwargs...) where {T <: NumberNotSeries} =
+    round(T, x, RoundNearest; kwargs...)
+round(::Type{T}, x::AbstractSeries, r::RoundingMode; kwargs...) where {T <: NumberNotSeries} =
+    round(T, constant_term(x), r; kwargs...)
 
 ## Division functions: rem and mod ##
 for op in (:mod, :rem)
@@ -264,7 +269,7 @@ end
 
 #update! function for TaylorN
 function update!(a::TaylorN{T}, vals::Vector{T}) where {T<:Number}
-    a.coeffs .= evaluate(a, variables(order(a)) .+ vals).coeffs
+    a.coeffs .= evaluate(a, variables(a.space; order=order(a)) .+ vals).coeffs
     return nothing
 end
 function update!(a::TaylorN{T}, vals::Vector{S}) where {T<:Number, S<:Number}
