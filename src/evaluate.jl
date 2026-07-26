@@ -7,13 +7,6 @@
 #
 
 ## Evaluating ##
-"""
-    evaluate(a, [dx])
-
-Evaluate a `Taylor1` polynomial using Horner's rule (hand coded). If `dx` is
-omitted, its value is considered as zero. Note that the syntax `a(dx)` is
-equivalent to `evaluate(a,dx)`, and `a()` is equivalent to `evaluate(a)`.
-"""
 @inline function _evaluate_taylor1_scalar(a::Taylor1{T}, dx::S) where
         {T<:NumberNotSeries, S<:NumberNotSeries}
     a_coeffs = a.coeffs
@@ -25,6 +18,13 @@ equivalent to `evaluate(a,dx)`, and `a()` is equivalent to `evaluate(a)`.
     return suma
 end
 
+"""
+    evaluate(a, [dx])
+
+Evaluate a `Taylor1` polynomial using Horner's rule (hand coded). If `dx` is
+omitted, its value is considered as zero. Note that the syntax `a(dx)` is
+equivalent to `evaluate(a,dx)`, and `a()` is equivalent to `evaluate(a)`.
+"""
 evaluate(a::Taylor1{T}, dx::S) where
     {T<:NumberNotSeries, S<:NumberNotSeries} = _evaluate_taylor1_scalar(a, dx)
 
