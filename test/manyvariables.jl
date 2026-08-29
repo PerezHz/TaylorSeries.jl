@@ -114,6 +114,13 @@ end
     @test_throws ArgumentError x + a
     @test_throws ArgumentError x * a
 
+    x32, y32, _ = variables(Float32, sx)
+    vals64 = variables(Float64, sx) .+ [0.1, 0.2, 0.3]
+    explicit_space_src = [x32 + y32^2]
+    explicit_space_dest = [zero(vals64[1])]
+    evaluate!(explicit_space_src, vals64, explicit_space_dest; sorting=false)
+    @test explicit_space_dest[1] == vals64[1] + vals64[2]^2
+
     old_default_space = TS.default_space[]
     dx, dy = variables()
     new_default_space = JetSpace(order=4, variables=[:δx, :δy, :δz])
@@ -597,11 +604,18 @@ end
     ones_int = ones(Int, 2)
     @test isnothing(evaluate!(xyT, ones_int, v))
     @test v == ones(2)
-    @test (@allocated evaluate!(xyT, ones_int, v)) == 0
+    @test isnothing(evaluate!(xyT, ones_int, v; sorting=false))
+    @test (@allocated evaluate!(xyT, ones_int, v; sorting=false)) == 0
     @test isnothing(evaluate!(xyT[1:2], ones_int, v))
     @test v == ones(2)
     A_TN = [xT 2xT 3xT; yT 2yT 3yT]
     @test evaluate(A_TN, ones(2)) == [1.0 2.0 3.0; 1.0 2.0 3.0]
+    @test evaluate(A_TN, (1.0, 2.0)) == [1.0 2.0 3.0; 2.0 4.0 6.0]
+    A_TN_dest = zeros(2, 3)
+    @test isnothing(evaluate!(A_TN, ones(2), A_TN_dest))
+    @test A_TN_dest == evaluate(A_TN, ones(2))
+    @test isnothing(evaluate!(A_TN, ones(2), A_TN_dest; sorting=false))
+    @test A_TN_dest == evaluate(A_TN, ones(2); sorting=false)
     @test evaluate(A_TN) == [0.0 0.0 0.0; 0.0 0.0 0.0]
     @test A_TN() == [0.0  0.0  0.0; 0.0  0.0  0.0]
     @test (view(A_TN,:,:))() == [0.0 0.0 0.0; 0.0 0.0 0.0]
@@ -973,6 +987,16 @@ end
         r2 = evaluate.(v, Ref(x1))
         @test r == r2
         @test iszero(norm(r-r2, Inf))
+        evaluate!(v, x1_tuple, r, valscache, aux; sorting=true)
+        @test r == evaluate.(v, Ref(x1); sorting=true)
+        @test_throws DimensionMismatch evaluate!(v[1], (x1[1],), r[1])
+        @test_throws DimensionMismatch evaluate!(v, x1_tuple, TaylorN{Float64}[])
+        aliased_cache = [zero(val) for val in x1_tuple]
+        aliased_cache[1] = x1_tuple[1]
+        @test_throws ArgumentError evaluate!(v[1], x1_tuple, r[1],
+            aliased_cache, aux)
+        @test_throws ArgumentError evaluate!(v[1], x1_tuple, v[1],
+            valscache, aux)
 
     end
 

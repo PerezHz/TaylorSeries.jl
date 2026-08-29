@@ -48,46 +48,6 @@ representing the dependent variables of an ODE, at *time* δt. Note that the
 syntax `x(δt)` is equivalent to `evaluate(x, δt)`, and `x()`
 is equivalent to `evaluate(x)`.
 """
-function evaluate(x::AbstractArray{Taylor1{T}}, δt::S) where
-        {T<:NumberNotSeries, S<:NumberNotSeries}
-    dest = similar(x, promote_type(T, S))
-    evaluate!(x, δt, dest)
-    return dest
-end
-
-function evaluate(x::AbstractArray{Taylor1{Taylor1{T}}}, δt::S) where
-        {T<:NumberNotSeries, S<:NumberNotSeries}
-    dest = similar(x, Taylor1{T})
-    @inbounds for i in eachindex(x, dest)
-        dest[i] = zero(x[i][0])
-    end
-    evaluate!(x, δt, dest)
-    return dest
-end
-
-function _zero_taylorN_evaluation_result(a::Taylor1{TaylorN{T}}) where {T<:Number}
-    imax = firstindex(a.coeffs)
-    maxord = order(a.coeffs[imax])
-    @inbounds for i in (firstindex(a.coeffs)+1):lastindex(a.coeffs)
-        ord = order(a.coeffs[i])
-        if ord > maxord
-            imax = i
-            maxord = ord
-        end
-    end
-    return zero(a.coeffs[imax])
-end
-
-function evaluate(x::AbstractArray{Taylor1{TaylorN{T}}}, δt::S) where
-        {T<:Number, S<:NumberNotSeries}
-    dest = similar(x, TaylorN{T})
-    @inbounds for i in eachindex(x, dest)
-        dest[i] = _zero_taylorN_evaluation_result(x[i])
-    end
-    evaluate!(x, δt, dest)
-    return dest
-end
-
 evaluate(x::AbstractArray{Taylor1{T}}, δt::S) where
     {T<:Number, S<:Number} = evaluate.(x, δt)
 
@@ -122,8 +82,21 @@ function evaluate(a::Taylor1{T}, x::Taylor1{T}) where {T<:Number}
     return suma
 end
 
+function _evaluation_order(a::Taylor1{<:AbstractSeries}, x::AbstractSeries)
+    ord = order(x)
+    for coeff in a.coeffs
+        coeff_order = order(coeff)
+        if ord == 0
+            ord = coeff_order
+        elseif coeff_order > 0
+            ord = min(ord, coeff_order)
+        end
+    end
+    return ord
+end
+
 function evaluate(a::Taylor1{Taylor1{T}}, x::Taylor1{T}) where {T<:NumberNotSeriesN}
-    @inbounds suma = a[end]*zero(x)
+    suma = Taylor1(zero(x[0]), _evaluation_order(a, x))
     _horner!(suma, a, x, zero(suma))
     return suma
 end
@@ -255,6 +228,26 @@ function _evaluate_homogeneous_scalar(a::HomogeneousPolynomial{T},
     return suma
 end
 
+function _evaluate_homogeneous_scalar(a::HomogeneousPolynomial{T},
+        vals::AbstractVector{S}) where
+        {T<:NumberNotSeries,S<:NumberNotSeries}
+    R = promote_type(T, S)
+    order(a) == 0 && return convert(R, a[1])
+    ct = a.space.coeff_table[order(a)+1]
+    suma = zero(R)
+    for (i, a_coeff) in enumerate(a.coeffs)
+        TS._isthinzero(a_coeff) && continue
+        term = convert(R, a_coeff)
+        @inbounds for j in eachindex(vals)
+            exponent = ct[i][j]
+            exponent == 0 && continue
+            term *= vals[j]^exponent
+        end
+        suma += term
+    end
+    return suma
+end
+
 _evaluate(a::HomogeneousPolynomial{T}, vals::NTuple) where {T} =
     _evaluate_homogeneous_scalar(a, vals)
 
@@ -340,14 +333,6 @@ function evaluate(a::TaylorN, vals::NTuple{N,<:AbstractSeries};
         sorting::Bool=false) where {N}
     @assert get_numvars(a) == N
     return _evaluate(a, vals, Val(sorting))
-end
-
-function evaluate(a::TaylorN{T}, vals::NTuple{N,TaylorN{T}};
-        sorting::Bool=false) where {N,T<:Number}
-    @assert get_numvars(a) == N
-    dest = zero(vals[1])
-    evaluate!(a, vals, dest; sorting)
-    return dest
 end
 
 evaluate(a::TaylorN{T}, vals::AbstractVector{<:Number}; sorting::Bool=true) where
@@ -544,31 +529,21 @@ function _evaluate!(suma::TaylorN{T}, a::HomogeneousPolynomial{T}, ind::Int,
 end
 
 
-#High-dim array evaluation
-function evaluate(A::AbstractArray{TaylorN{T}}, δx::AbstractVector{S}) where
-        {T<:Number, S<:Number}
-    Anew = similar(A, promote_type(T, S))
-    evaluate!(A, δx, Anew)
-    return Anew
+# High-dimensional array evaluation. Keep this allocating interface as a
+# broadcast of scalar evaluations so it retains scalar promotion, sorting and
+# array-container semantics (in particular for static arrays and views).
+function evaluate(A::AbstractArray{TaylorN{T}}, vals::AbstractVector{S};
+        sorting::Bool=!(T <: AbstractSeries || S <: AbstractSeries)) where
+        {T<:Number,S<:Number}
+    return evaluate.(A, Ref(vals); sorting)
 end
-function evaluate(A::AbstractArray{TaylorN{T}}, δx::AbstractVector{TaylorN{T}};
-        sorting::Bool=false) where {T<:Number}
-    Anew = similar(A, TaylorN{T})
-    @inbounds for i in eachindex(Anew)
-        Anew[i] = zero(δx[1])
-    end
-    evaluate!(A, δx, Anew; sorting)
-    return Anew
+
+function evaluate(A::AbstractArray{TaylorN{T}}, vals::Tuple{S,Vararg{S}};
+        sorting::Bool=!(T <: AbstractSeries || S <: AbstractSeries)) where
+        {T<:Number,S<:Number}
+    return evaluate.(A, Ref(vals); sorting)
 end
-function evaluate(A::AbstractArray{TaylorN{T}}, vals::NTuple{N,TaylorN{T}};
-        sorting::Bool=false) where {N,T<:Number}
-    Anew = similar(A, TaylorN{T})
-    @inbounds for i in eachindex(Anew)
-        Anew[i] = zero(vals[1])
-    end
-    evaluate!(A, vals, Anew; sorting)
-    return Anew
-end
+
 evaluate(A::AbstractArray{TaylorN{T}}) where {T<:Number} = evaluate.(A)
 
 #function-like behavior for TaylorN
@@ -603,46 +578,26 @@ function evaluate!(x::AbstractArray{Taylor1{T}}, δt::S,
 end
 
 function evaluate!(a::Taylor1{Taylor1{T}}, δt::S,
-        dest::Taylor1{T}) where {T<:NumberNotSeries, S<:NumberNotSeries}
+        dest::Taylor1{R}) where
+        {T<:NumberNotSeries,S<:NumberNotSeries,R<:NumberNotSeries}
+    for coeff in a.coeffs
+        (iszero(order(coeff)) || order(dest) <= order(coeff)) || throw(DimensionMismatch(
+            "destination order exceeds a Taylor1 coefficient order"))
+    end
     zero!(dest)
     @inbounds for k in reverse(eachindex(a))
-        mul!(dest, dest, δt)
-        add!(dest, dest, a[k])
-    end
-    return nothing
-end
-
-function _muladd_taylor1_evaluate!(dest::Taylor1{T}, δt::Taylor1{T},
-        coeff::Taylor1{T}) where {T<:NumberNotSeries}
-    @inbounds for ord in reverse(eachindex(dest))
-        acc = zero(dest[ord])
-        for i in 0:ord
-            acc += dest[i] * δt[ord-i]
+        coeff = a[k]
+        for ord in eachindex(dest)
+            dest[ord] *= δt
+            ord <= order(coeff) && (dest[ord] += coeff[ord])
         end
-        dest[ord] = acc + coeff[ord]
-    end
-    return nothing
-end
-
-function evaluate!(a::Taylor1{Taylor1{T}}, δt::Taylor1{T},
-        dest::Taylor1{T}) where {T<:NumberNotSeries}
-    zero!(dest)
-    @inbounds for k in reverse(eachindex(a))
-        _muladd_taylor1_evaluate!(dest, δt, a[k])
     end
     return nothing
 end
 
 function evaluate!(x::AbstractArray{Taylor1{Taylor1{T}}}, δt::S,
-        dest::AbstractArray{Taylor1{T}}) where {T<:NumberNotSeries, S<:NumberNotSeries}
-    @inbounds for i in eachindex(x, dest)
-        evaluate!(x[i], δt, dest[i])
-    end
-    return nothing
-end
-
-function evaluate!(x::AbstractArray{Taylor1{Taylor1{T}}}, δt::Taylor1{T},
-        dest::AbstractArray{Taylor1{T}}) where {T<:NumberNotSeries}
+        dest::AbstractArray{Taylor1{R}}) where
+        {T<:NumberNotSeries,S<:NumberNotSeries,R<:NumberNotSeries}
     @inbounds for i in eachindex(x, dest)
         evaluate!(x[i], δt, dest[i])
     end
@@ -651,7 +606,12 @@ end
 
 function evaluate!(a::Taylor1{TaylorN{T}}, δt::S,
         dest::TaylorN{T}) where {T<:Number, S<:NumberNotSeries}
-    _check_same_space(dest, a[0])
+    for coeff in a.coeffs
+        _check_same_space(dest, coeff)
+        (iszero(order(coeff)) || order(dest) <= order(coeff)) ||
+            throw(DimensionMismatch(
+                "destination order exceeds a TaylorN coefficient order"))
+    end
     zero!(dest)
     @inbounds for k in reverse(eachindex(a))
         a_coeff = a[k]
@@ -672,57 +632,6 @@ function evaluate!(a::Taylor1{TaylorN{T}}, δt::S,
     return nothing
 end
 
-@inline function _taylorN_product_coeff(dest::TaylorN{T}, δt::TaylorN{T},
-        ordQ::Int, pos::Int) where {T<:Number}
-    acc = zero(dest[ordQ][pos])
-    @inbounds for i in 0:ordQ
-        dest_hp = dest[i]
-        δt_hp = δt[ordQ-i]
-        if i == 0
-            acc += dest_hp[1] * δt_hp[pos]
-        elseif i == ordQ
-            acc += δt_hp[1] * dest_hp[pos]
-        else
-            table = _init_output_major_product_table!(dest_hp.space, i, ordQ-i)
-            offsets = table.output_offsets
-            output_pairs = table.output_pairs
-            num_right = table.num_right
-            dest_coeffs = dest_hp.coeffs
-            δt_coeffs = δt_hp.coeffs
-            for csr_pos in offsets[pos]:(offsets[pos+1]-1)
-                pair = Int(output_pairs[csr_pos]) - 1
-                na = pair ÷ num_right + 1
-                nb = pair - (na-1) * num_right + 1
-                acc += dest_coeffs[na] * δt_coeffs[nb]
-            end
-        end
-    end
-    return acc
-end
-
-function _muladd_taylorN_evaluate!(dest::TaylorN{T}, δt::TaylorN{T},
-        coeff::TaylorN{T}) where {T<:Number}
-    _check_same_space(dest, δt, coeff)
-    @inbounds for ordQ in reverse(eachindex(dest))
-        dest_hp = dest[ordQ]
-        coeff_hp = coeff[ordQ]
-        for pos in eachindex(dest_hp)
-            dest_hp[pos] = _taylorN_product_coeff(dest, δt, ordQ, pos) + coeff_hp[pos]
-        end
-    end
-    return nothing
-end
-
-function evaluate!(a::Taylor1{TaylorN{T}}, δt::TaylorN{T},
-        dest::TaylorN{T}) where {T<:Number}
-    _check_same_space(dest, δt, a[0])
-    zero!(dest)
-    @inbounds for k in reverse(eachindex(a))
-        _muladd_taylorN_evaluate!(dest, δt, a[k])
-    end
-    return nothing
-end
-
 function evaluate!(x::AbstractArray{Taylor1{TaylorN{T}}}, δt::S,
         dest::AbstractArray{TaylorN{T}}) where {T<:Number, S<:NumberNotSeries}
     @inbounds for i in eachindex(x, dest)
@@ -731,26 +640,112 @@ function evaluate!(x::AbstractArray{Taylor1{TaylorN{T}}}, δt::S,
     return nothing
 end
 
-function evaluate!(x::AbstractArray{Taylor1{TaylorN{T}}}, δt::TaylorN{T},
-        dest::AbstractArray{TaylorN{T}}) where {T<:Number}
-    @inbounds for i in eachindex(x, dest)
-        evaluate!(x[i], δt, dest[i])
+function _check_series_evaluation(a::Taylor1{T}, δt::T, dest::T,
+        aux::T) where {T<:Union{Taylor1,TaylorN}}
+    dest === δt && throw(ArgumentError("destination must not alias the evaluation value"))
+    dest === aux && throw(ArgumentError("destination and scratch value must not alias"))
+    δt === aux && throw(ArgumentError("evaluation and scratch values must not alias"))
+    _check_same_space(dest, δt, aux)
+    order(dest) == order(aux) || throw(DimensionMismatch(
+        "destination and scratch value must have the same order"))
+    order(dest) <= order(δt) || throw(DimensionMismatch(
+        "destination order exceeds the evaluation value order"))
+    for coeff in a.coeffs
+        _check_same_space(dest, coeff)
+        coeff === dest && throw(ArgumentError(
+            "destination must not alias a polynomial coefficient"))
+        coeff === aux && throw(ArgumentError(
+            "scratch value must not alias a polynomial coefficient"))
+        (iszero(order(coeff)) || order(dest) <= order(coeff)) ||
+            throw(DimensionMismatch(
+                "destination order exceeds a nonconstant coefficient order"))
     end
     return nothing
 end
 
+"""
+    evaluate!(a, δt, dest, aux)
+    evaluate!(x, δt, dest, aux)
+
+Evaluate a `Taylor1` polynomial, or an array of them, at a series-valued
+`δt`. The result is written into `dest`, while `aux` is reusable scratch
+storage. The destination, evaluation value and scratch value must have the
+same series space and must not alias one another. `dest` and `aux` must have
+the same order, no greater than the order of `δt`. Nonconstant coefficient
+orders must also be at least the destination order.
+"""
+function evaluate!(a::Taylor1{T}, δt::T, dest::T,
+        aux::T) where {T<:Union{Taylor1,TaylorN}}
+    _check_series_evaluation(a, δt, dest, aux)
+    zero!(dest)
+    _horner!(dest, a, δt, aux)
+    return nothing
+end
+
+function evaluate!(x::AbstractArray{Taylor1{T}}, δt::T,
+        dest::AbstractArray{T}, aux::T) where {T<:Union{Taylor1,TaylorN}}
+    @inbounds for i in eachindex(x, dest)
+        evaluate!(x[i], δt, dest[i], aux)
+    end
+    return nothing
+end
+
+function evaluate!(a::Taylor1{T}, δt::T,
+        dest::T) where {T<:Union{Taylor1,TaylorN}}
+    aux = zero(dest)
+    evaluate!(a, δt, dest, aux)
+    return nothing
+end
+
+function evaluate!(x::AbstractArray{Taylor1{T}}, δt::T,
+        dest::AbstractArray{T}) where {T<:Union{Taylor1,TaylorN}}
+    if isempty(dest)
+        isempty(x) && return nothing
+        throw(DimensionMismatch("source and destination arrays must have matching indices"))
+    end
+    aux = zero(dest[firstindex(dest)])
+    evaluate!(x, δt, dest, aux)
+    return nothing
+end
+
 ## In place evaluation of multivariable arrays
-function evaluate!(x::AbstractArray{TaylorN{T}}, δx::AbstractVector{S},
-        dest::AbstractArray{R}) where {T<:Number, S<:Number, R<:Number}
+function _evaluate_taylorN_array!(x::AbstractArray{TaylorN{T}},
+        δx::AbstractVector{S}, dest::AbstractArray{R},
+        ::Val{false}) where
+        {T<:Number,S<:Number,R<:Number}
     @inbounds for i in eachindex(x, dest)
         dest[i] = _evaluate_taylorN_scalar(x[i], δx)
     end
     return nothing
 end
 
+function _evaluate_taylorN_array!(x::AbstractArray{TaylorN{T}},
+        δx::AbstractVector{S}, dest::AbstractArray{R},
+        ::Val{true}) where
+        {T<:Number,S<:Number,R<:Number}
+    @inbounds for i in eachindex(x, dest)
+        dest[i] = evaluate(x[i], δx; sorting=true)
+    end
+    return nothing
+end
+
+@inline function evaluate!(x::AbstractArray{TaylorN{T}}, δx::AbstractVector{S},
+        dest::AbstractArray{R};
+        sorting::Bool=!(T <: AbstractSeries || S <: AbstractSeries)) where
+        {T<:Number,S<:Number,R<:Number}
+    _evaluate_taylorN_array!(x, δx, dest, Val(sorting))
+    return nothing
+end
+
 function evaluate!(x::AbstractArray{TaylorN{T}}, δx::AbstractVector{TaylorN{T}},
         dest::AbstractArray{TaylorN{T}}; sorting::Bool=false) where {T<:NumberNotSeriesN}
-    evaluate!(x, (δx...,), dest; sorting)
+    if sorting
+        @inbounds for i in eachindex(x, dest)
+            dest[i] = evaluate(x[i], δx; sorting=true)
+        end
+    else
+        evaluate!(x, (δx...,), dest; sorting=false)
+    end
     return nothing
 end
 
@@ -762,14 +757,62 @@ function _evaluate!(a::TaylorN{T}, vals::NTuple{N,TaylorN{T}}, dest::TaylorN{T},
     return nothing
 end
 
+function _check_taylorN_evaluation(a::TaylorN{T}, vals::NTuple{N,TaylorN{T}},
+        dest::TaylorN{T}, valscache::Vector{TaylorN{T}},
+        aux::TaylorN{T}) where {N,T<:Number}
+    get_numvars(a) == N || throw(DimensionMismatch(
+        "number of evaluation values must match the number of variables"))
+    length(valscache) == N || throw(DimensionMismatch(
+        "evaluation cache length must match the number of evaluation values"))
+    _check_same_space(a, dest, aux)
+    order(dest) == order(aux) || throw(DimensionMismatch(
+        "destination and scratch value must have the same order"))
+    a === dest && throw(ArgumentError(
+        "destination must not alias the polynomial being evaluated"))
+    a === aux && throw(ArgumentError(
+        "scratch value must not alias the polynomial being evaluated"))
+    dest === aux && throw(ArgumentError("destination and scratch value must not alias"))
+    for i in eachindex(vals)
+        _check_same_space(dest, vals[i], valscache[i])
+        order(vals[i]) == order(dest) == order(valscache[i]) ||
+            throw(DimensionMismatch(
+                "evaluation values, destination and cache must have the same order"))
+        vals[i] === dest && throw(ArgumentError(
+            "destination must not alias an evaluation value"))
+        vals[i] === aux && throw(ArgumentError(
+            "scratch value must not alias an evaluation value"))
+        valscache[i] === dest && throw(ArgumentError(
+            "destination must not alias the evaluation cache"))
+        valscache[i] === aux && throw(ArgumentError(
+            "scratch value must not alias the evaluation cache"))
+        valscache[i] === a && throw(ArgumentError(
+            "evaluation cache must not alias the polynomial being evaluated"))
+        for val in vals
+            valscache[i] === val && throw(ArgumentError(
+                "evaluation cache must not alias an evaluation value"))
+        end
+        for j in firstindex(valscache):(i-1)
+            valscache[i] === valscache[j] && throw(ArgumentError(
+                "evaluation cache entries must not alias one another"))
+        end
+    end
+    return nothing
+end
+
 function evaluate!(a::TaylorN{T}, vals::NTuple{N,TaylorN{T}},
         dest::TaylorN{T}, valscache::Vector{TaylorN{T}},
         aux::TaylorN{T}; sorting::Bool=false) where {N,T<:Number}
-    length(valscache) == N || throw(DimensionMismatch(
-        "evaluation cache length must match the number of evaluation values"))
-    sorting && throw(ArgumentError("sorting=true is not supported by the allocation-free evaluate! kernel"))
-    (!iszero(dest)) && zero!(dest)
-    _evaluate!(a, vals, dest, valscache, aux)
+    _check_taylorN_evaluation(a, vals, dest, valscache, aux)
+    if sorting
+        result = evaluate(a, vals; sorting=true)
+        zero!(dest)
+        for ord in eachindex(dest)
+            identity!(dest, result, ord)
+        end
+    else
+        zero!(dest)
+        _evaluate!(a, vals, dest, valscache, aux)
+    end
     return nothing
 end
 
@@ -784,10 +827,7 @@ end
 function evaluate!(a::AbstractArray{TaylorN{T}}, vals::NTuple{N,TaylorN{T}},
         dest::AbstractArray{TaylorN{T}}, valscache::Vector{TaylorN{T}},
         aux::TaylorN{T}; sorting::Bool=false) where {N,T<:Number}
-    length(valscache) == N || throw(DimensionMismatch(
-        "evaluation cache length must match the number of evaluation values"))
-    sorting && throw(ArgumentError("sorting=true is not supported by the allocation-free evaluate! kernel"))
-    for i in eachindex(a)
+    for i in eachindex(a, dest)
         evaluate!(a[i], vals, dest[i], valscache, aux; sorting)
     end
     return nothing
@@ -795,8 +835,12 @@ end
 
 function evaluate!(a::AbstractArray{TaylorN{T}}, vals::NTuple{N,TaylorN{T}},
         dest::AbstractArray{TaylorN{T}}; sorting::Bool=false) where {N,T<:Number}
+    if isempty(dest)
+        isempty(a) && return nothing
+        throw(DimensionMismatch("source and destination arrays must have matching indices"))
+    end
     valscache = [zero(val) for val in vals]
-    aux = zero(dest[1])
+    aux = zero(dest[firstindex(dest)])
     evaluate!(a, vals, dest, valscache, aux; sorting)
     return nothing
 end
@@ -823,7 +867,11 @@ function _horner!(suma::Taylor1{T}, a::Taylor1{Taylor1{T}}, x::Taylor1{T},
             mul!(aux, suma, x, ord)
         end
         for ord in eachindex(suma)
-            add!(suma, aux, a[k], ord)
+            if ord <= order(a[k])
+                add!(suma, aux, a[k], ord)
+            else
+                identity!(suma, aux, ord)
+            end
         end
     end
     return nothing
@@ -880,7 +928,11 @@ function _horner!(suma::TaylorN{T}, a::Taylor1{TaylorN{T}}, dx::S,
             mul!(aux, suma, dx, ord)
         end
         for ord in eachindex(aux)
-            add!(suma, aux, a[k], ord)
+            if ord <= order(a[k])
+                add!(suma, aux, a[k], ord)
+            else
+                identity!(suma, aux, ord)
+            end
         end
     end
     return nothing
