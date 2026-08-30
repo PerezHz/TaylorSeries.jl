@@ -605,7 +605,8 @@ end
     @test isnothing(evaluate!(xyT, ones_int, v))
     @test v == ones(2)
     @test isnothing(evaluate!(xyT, ones_int, v; sorting=false))
-    @test (@allocated evaluate!(xyT, ones_int, v; sorting=false)) == 0
+    eval_allocs(x, vals, dest) = @allocated evaluate!(x, vals, dest; sorting=false)
+    @test eval_allocs(xyT, ones_int, v) == 0
     @test isnothing(evaluate!(xyT[1:2], ones_int, v))
     @test v == ones(2)
     A_TN = [xT 2xT 3xT; yT 2yT 3yT]
