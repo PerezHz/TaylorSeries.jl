@@ -48,6 +48,8 @@ representing the dependent variables of an ODE, at *time* δt. Note that the
 syntax `x(δt)` is equivalent to `evaluate(x, δt)`, and `x()`
 is equivalent to `evaluate(x)`.
 """
+# TODO: Preserve a concrete promoted element type for empty arrays without
+# changing the container semantics of static arrays.
 evaluate(x::AbstractArray{Taylor1{T}}, δt::S) where
     {T<:Number, S<:Number} = evaluate.(x, δt)
 
@@ -532,6 +534,8 @@ end
 # High-dimensional array evaluation. Keep this allocating interface as a
 # broadcast of scalar evaluations so it retains scalar promotion, sorting and
 # array-container semantics (in particular for static arrays and views).
+# TODO: Preserve concrete result element types for empty arrays once this can
+# be done without duplicating the scalar promotion rules.
 function evaluate(A::AbstractArray{TaylorN{T}}, vals::AbstractVector{S};
         sorting::Bool=!(T <: AbstractSeries || S <: AbstractSeries)) where
         {T<:Number,S<:Number}
@@ -703,6 +707,8 @@ function evaluate!(x::AbstractArray{Taylor1{T}}, δt::T,
         isempty(x) && return nothing
         throw(DimensionMismatch("source and destination arrays must have matching indices"))
     end
+    # TODO: Reuse this scratch for uniform destinations, but fall back to a
+    # correctly sized per-element scratch when destination orders differ.
     aux = zero(dest[firstindex(dest)])
     evaluate!(x, δt, dest, aux)
     return nothing
