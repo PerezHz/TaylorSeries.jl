@@ -694,13 +694,6 @@ function evaluate!(x::AbstractArray{Taylor1{T}}, δt::T,
     return nothing
 end
 
-function evaluate!(a::Taylor1{T}, δt::T,
-        dest::T) where {T<:Union{Taylor1,TaylorN}}
-    aux = zero(dest)
-    evaluate!(a, δt, dest, aux)
-    return nothing
-end
-
 function evaluate!(x::AbstractArray{Taylor1{T}}, δt::T,
         dest::AbstractArray{T}) where {T<:Union{Taylor1,TaylorN}}
     if isempty(dest)
@@ -819,14 +812,6 @@ function evaluate!(a::TaylorN{T}, vals::NTuple{N,TaylorN{T}},
         zero!(dest)
         _evaluate!(a, vals, dest, valscache, aux)
     end
-    return nothing
-end
-
-function evaluate!(a::TaylorN{T}, vals::NTuple{N,TaylorN{T}},
-        dest::TaylorN{T}; sorting::Bool=false) where {N,T<:Number}
-    valscache = [zero(val) for val in vals]
-    aux = zero(dest)
-    evaluate!(a, vals, dest, valscache, aux; sorting)
     return nothing
 end
 

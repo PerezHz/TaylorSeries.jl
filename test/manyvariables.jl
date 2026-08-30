@@ -990,7 +990,8 @@ end
         @test iszero(norm(r-r2, Inf))
         evaluate!(v, x1_tuple, r, valscache, aux; sorting=true)
         @test r == evaluate.(v, Ref(x1); sorting=true)
-        @test_throws DimensionMismatch evaluate!(v[1], (x1[1],), r[1])
+        @test_throws DimensionMismatch evaluate!(v[1], (x1[1],), r[1],
+            valscache, aux)
         @test_throws DimensionMismatch evaluate!(v, x1_tuple, TaylorN{Float64}[])
         aliased_cache = [zero(val) for val in x1_tuple]
         aliased_cache[1] = x1_tuple[1]
