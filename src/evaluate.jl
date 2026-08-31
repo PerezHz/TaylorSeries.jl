@@ -403,6 +403,8 @@ evaluate(a::TaylorN{T}, x::Pair{Symbol,S}) where {T, S} =
 
 evaluate(a::TaylorN{T}) where {T<:Number} = constant_term(a)
 
+# TODO: Avoid the component-vector and sorting allocations produced by
+# `sorting=true`, likely by accepting caller-provided workspace.
 _evaluate(a::TaylorN{T}, vals::NTuple, ::Val{true}) where
     {T<:NumberNotSeries} = sum( sort!(_evaluate(a, vals), by=abs2) )
 
