@@ -607,8 +607,10 @@ magnitude-sorted scalar evaluation and may allocate. Sorting defaults to true
 for ordinary scalar types and false when the coefficient or evaluation-value
 type is a series.
 
-For series-valued substitutions, the explicit-workspace overloads documented
-below are the reusable hot path.
+For series-valued substitutions (i.e., when the evaluation argument is
+a Taylor series variable), the `evaluate!` methods that accept scratch buffers
+should be used, so that buffers are allocated only once and are reused across
+calls.
 """
 function evaluate!(x::AbstractArray{Taylor1{T}}, δt::S,
         dest::AbstractArray{R}) where
@@ -759,8 +761,9 @@ function evaluate!(x::AbstractArray{Taylor1{T}}, δt::T,
         isempty(x) && return nothing
         throw(DimensionMismatch("source and destination arrays must have matching indices"))
     end
-    # Compatibility overload: the four-argument method is the reusable hot
-    # path; this form creates one scratch series for the whole array call.
+    # Compatibility method: the four-argument `evaluate!(x, δt, dest, aux)`
+    # method does not allocate `aux`; this form creates one auxiliary variable
+    # `aux` series which is allocated only once and reused throughout.
     # TODO: Detect heterogeneous destination orders and create correctly sized
     # per-element scratch only for that fallback.
     aux = zero(dest[firstindex(dest)])
@@ -935,8 +938,9 @@ function evaluate!(a::AbstractArray{TaylorN{T}}, vals::NTuple{N,TaylorN{T}},
         isempty(a) && return nothing
         throw(DimensionMismatch("source and destination arrays must have matching indices"))
     end
-    # Compatibility overload: construct one cache set and auxiliary series for
-    # this call. The explicit-workspace method above is the reusable hot path.
+    # Compatibility method: construct one cache set and auxiliary series for
+    # this call. The explicit-workspace method 
+    # `evaluate!(a, vals, dest, valscache, aux; sorting)` is the allocation-free method.
     valscache = [zero(val) for val in vals]
     aux = zero(dest[firstindex(dest)])
     evaluate!(a, vals, dest, valscache, aux; sorting)
