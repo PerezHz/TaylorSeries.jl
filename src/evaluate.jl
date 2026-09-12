@@ -17,7 +17,7 @@ creating intermediate containers. This is the scalar kernel shared by
 @inline function _evaluate_taylor1_scalar(a::Taylor1{T}, dx::S) where
         {T<:NumberNotSeries, S<:NumberNotSeries}
     a_coeffs = a.coeffs
-    @inbounds suma = zero(a_coeffs[end])
+    @inbounds suma = zero(a_coeffs[end])*dx
     @inbounds for k in reverse(eachindex(a_coeffs))
         suma = suma * dx + a_coeffs[k]
     end
